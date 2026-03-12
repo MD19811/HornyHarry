@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ventje's Monster Hunter - Duck & Shoot Edition</title>
+    <style>
+        :root {
+            --sky: #87CEEB;
+            --grass: #2d5a27;
+            --dirt: #5d4037;
+            --ui-font: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body { margin: 0; overflow: hidden; background: #222; font-family: var(--ui-font); }
+
+        #ui-layer {
+            position: absolute; top: 20px; left: 20px;
+            color: white; pointer-events: none; z-index: 5;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.7);
+        }
+        .stat { font-size: 24px; margin-bottom: 5px; }
+        .hint { font-size: 14px; opacity: 0.8; color: #ffeb3b; }
+
+        #reward-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            display: none; background: rgba(0,0,0,0.95); z-index: 20;
+            justify-content: center; align-items: center; flex-direction: column;
+            cursor: pointer; animation: fadeIn 0.5s;
+        }
+        #reward-overlay img {
+            max-width: 90vw; max-height: 80vh;
+            border: 10px solid #fff; border-radius: 4px;
+            object-fit: contain;
+        }
+
+        #death-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            display: none; background: rgba(180, 0, 0, 0.8); z-index: 15;
+            justify-content: center; align-items: center;
+            color: white; font-size: 60px; font-weight: 900;
+        }
+
+        canvas { display: block; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div class="stat">Level: <span id="lvl">1</span></div>
+        <div class="stat">Deaths: <span id="deaths">0</span> | Kills: <span id="kills">0</span></div>
+        <div class="hint">ARROWS: Move & <b>DUCK</b> | SPACE: Jump (Twice!) | <b>S: SHOOT</b></div>
+    </div>
+
+    <div id="death-overlay">OOPS! DOOD!</div>
+
+    <div id="reward-overlay" onclick="game.nextLevel()">
+        <img id="reward-img" src="" alt="Victory Image">
+        <p style="color: white; font-size: 20px; margin-top: 15px;">Nice! Click to play Level <span id="next-lvl-hint"></span></p>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+const SPRITE_SRC = 'images/ventje.png';
+const DUCK_SRC = 'images/ducked.png';
+const DOG_SRC = 'images/monster.png';
+
+const game = {
+    level: 1,
+    deathCount: 0,
+    killCount: 0,
+    paused: false,
+    gravity: 0.8,
+    friction: 0.8,
+    keys: {},
+    platforms: [],
+    dogs: [],
+    bullets: [],
+    clouds: [],
+    cameraX: 0,
+    levelWidth: 0,
+
+    init() {
+        this.player = new Player();
+        this.loadLevel(this.level);
+        this.loop();
+    },
+
+    loadLevel(n) {
+        document.getElementById('lvl').innerText = n;
+        document.getElementById('next-lvl-hint').innerText = n + 1;
+        this.player.reset();
+        this.dogs = [];
+        this.platforms = [];
+        this.clouds = [];
+        this.bullets = [];
+        this.cameraX = 0;
+
+        this.levelWidth = 3000 + (n * 1000);
+        const groundY = canvas.height - 100;
+
+        for(let i = 0; i < 25; i++) {
+            this.clouds.push({
+                x: Math.random() * this.levelWidth,
+                y: Math.random() * (canvas.height / 2),
+                w: 100 + Math.random() * 100,
+                s: 0.1 + Math.random() * 0.3
+            });
+        }
+
+        let currentX = 0;
+        let lastY = groundY;
+
+        this.platforms.push({ x: 0, y: groundY, w: 600, h: 800 });
+        currentX = 600;
+
+        while (currentX < this.levelWidth - 800) {
+            let gap = 150 + Math.random() * 300;
+            let pWidth = 300 + Math.random() * 500;
+            let heightChange = (Math.random() - 0.5) * 350;
+            let pY = Math.max(canvas.height * 0.3, Math.min(lastY + heightChange, groundY));
+
+            this.platforms.push({ x: currentX + gap, y: pY, w: pWidth, h: 1000 });
+
+            if (Math.random() > 0.4) {
+                this.dogs.push(new Dog(currentX + gap + 50, pY - 55, pWidth - 100, 3 + (n * 0.3)));
+            }
+
+            currentX += gap + pWidth;
+            lastY = pY;
+        }
+
+        this.platforms.push({ x: this.levelWidth - 700, y: groundY, w: 700, h: 800 });
+        this.door = { x: this.levelWidth - 200, y: groundY - 110, w: 70, h: 110 };
+    },
+
+    die() {
+        if (this.paused) return;
+        this.paused = true;
+        this.deathCount++;
+        document.getElementById('deaths').innerText = this.deathCount;
+        document.getElementById('death-overlay').style.display = 'flex';
+        setTimeout(() => {
+            document.getElementById('death-overlay').style.display = 'none';
+            this.paused = false;
+            this.loadLevel(this.level);
+        }, 1200);
+    },
+
+    win() {
+        this.paused = true;
+        const img = document.getElementById('reward-img');
+        let randomNum = Math.floor(Math.random() * 102) + 1;
+        let formattedNum = randomNum.toString().padStart(2, '0');
+        img.src = `https://md19811.github.io/Manillen/randomM/${formattedNum}.jpg`;
+        document.getElementById('reward-overlay').style.display = 'flex';
+    },
+
+    nextLevel() {
+        document.getElementById('reward-overlay').style.display = 'none';
+        this.level++;
+        this.paused = false;
+        this.loadLevel(this.level);
+    },
+
+    loop() {
+        if (!this.paused) {
+            this.update();
+            this.draw();
+        }
+        requestAnimationFrame(() => this.loop());
+    },
+
+    update() {
+        this.player.update(this.keys, this.platforms, this.gravity, this.friction);
+
+        let targetCamX = this.player.x - canvas.width / 2;
+        this.cameraX += (targetCamX - this.cameraX) * 0.08;
+        this.cameraX = Math.max(0, Math.min(this.cameraX, this.levelWidth - canvas.width));
+
+        this.bullets.forEach((b, idx) => {
+            b.x += b.vx;
+            if (Math.abs(b.x - this.player.x) > canvas.width) this.bullets.splice(idx, 1);
+
+            this.dogs.forEach((dog, dIdx) => {
+                if (this.rectIntersect(b, dog)) {
+                    this.dogs.splice(dIdx, 1);
+                    this.bullets.splice(idx, 1);
+                    this.killCount++;
+                    document.getElementById('kills').innerText = this.killCount;
+                }
+            });
+        });
+
+        if (this.player.y > canvas.height + 200) this.die();
+
+        this.dogs.forEach(dog => {
+            dog.update();
+            if (this.rectIntersect(this.player, dog)) this.die();
+        });
+
+        if (this.rectIntersect(this.player, this.door)) this.win();
+    },
+
+    draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        let grad = ctx.createLinearGradient(0,0,0, canvas.height);
+        grad.addColorStop(0, '#87CEEB');
+        grad.addColorStop(1, '#E0F6FF');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0,0, canvas.width, canvas.height);
+
+        ctx.save();
+        ctx.translate(-this.cameraX, 0);
+
+        ctx.fillStyle = "rgba(255,255,255,0.6)";
+        this.clouds.forEach(c => {
+            ctx.beginPath();
+            ctx.ellipse(c.x + (this.cameraX * c.s), c.y, c.w, c.w/2, 0, 0, Math.PI*2);
+            ctx.fill();
+        });
+
+        this.platforms.forEach(p => {
+            ctx.fillStyle = '#2d5a27'; ctx.fillRect(p.x, p.y, p.w, 15);
+            ctx.fillStyle = '#5d4037'; ctx.fillRect(p.x, p.y + 15, p.w, p.h);
+        });
+
+        ctx.fillStyle = "#4b806b";
+        this.bullets.forEach(b => ctx.fillRect(b.x, b.y, b.w, b.h));
+
+        // Draw Door
+        ctx.fillStyle = '#3e2723';
+        ctx.fillRect(this.door.x, this.door.y, this.door.w, this.door.h);
+
+        // Add "HOEREKOT" above the door
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 20px Segoe UI';
+        ctx.textAlign = 'center';
+        ctx.fillText("HOEREKOT", this.door.x + this.door.w / 2, this.door.y - 15);
+
+        ctx.fillStyle = '#ffd600';
+        ctx.beginPath(); ctx.arc(this.door.x + 15, this.door.y + 55, 6, 0, Math.PI*2); ctx.fill();
+
+        this.dogs.forEach(d => d.draw());
+        this.player.draw();
+
+        ctx.restore();
+    },
+
+    rectIntersect(r1, r2) {
+        return !(r2.x > r1.x + r1.w || r2.x + r2.w < r1.x ||
+                 r2.y > r1.y + r1.h || r2.y + r2.h < r1.y);
+    }
+};
+
+class Player {
+    constructor() {
+        this.img = new Image();
+        this.img.src = SPRITE_SRC;
+        this.duckImg = new Image();
+        this.duckImg.src = DUCK_SRC;
+        this.w = 120; this.h = 150;
+        this.reset();
+    }
+    reset() {
+        this.x = 150; this.y = 100; this.vx = 0; this.vy = 0;
+        this.grounded = false; this.flip = false; this.anim = 0;
+        this.jumps = 0; this.canShoot = true; this.isDucking = false;
+    }
+    update(keys, platforms, gravity, friction) {
+        // Duck Logic (Down Arrow = 40)
+        if (keys[40] && this.grounded) {
+            this.isDucking = true;
+            this.vx = 0;
+        } else {
+            this.isDucking = false;
+        }
+
+        if (!this.isDucking) {
+            if (keys[39]) { this.vx += 1.2; this.flip = false; }
+            if (keys[37]) { this.vx -= 1.2; this.flip = true; }
+        }
+
+        if (keys[83] && this.canShoot) {
+            this.shoot();
+            this.canShoot = false;
+            setTimeout(() => this.canShoot = true, 250);
+        }
+
+        this.vx *= friction;
+        this.vy += gravity;
+        this.grounded = false;
+
+        let currentH = this.isDucking ? this.h * 0.6 : this.h;
+
+        platforms.forEach(p => {
+            if (this.x < p.x + p.w && this.x + this.w > p.x && this.y + currentH > p.y && this.y + currentH < p.y + p.h) {
+                if (this.vy > 0) {
+                    this.vy = 0; this.y = p.y - currentH;
+                    this.grounded = true; this.jumps = 0;
+                }
+            }
+        });
+
+        this.x += this.vx; this.y += this.vy;
+        if (Math.abs(this.vx) > 1) this.anim += 0.25;
+    }
+    jump() {
+        if (!this.isDucking && (this.grounded || this.jumps < 2)) {
+            this.vy = -18;
+            this.jumps++;
+            this.grounded = false;
+        }
+    }
+    shoot() {
+        let bulletY = this.isDucking ? this.y + (this.h * 0.4) : this.y + this.h/2 + 5;
+        game.bullets.push({
+            x: this.flip ? this.x : this.x + this.w,
+            y: bulletY,
+            w: 20, h: 6,
+            vx: this.flip ? -16 : 16
+        });
+    }
+   draw() {
+       ctx.save();
+       let activeImg = this.isDucking ? this.duckImg : this.img;
+
+       // Set wobble to 0 to remove the vertical bouncing effect
+       let wobble = 0;
+
+       let drawY = this.isDucking ? this.y + (this.h * 0.4) : this.y;
+
+       if (this.flip) {
+           ctx.scale(-1, 1);
+           ctx.drawImage(activeImg, -(this.x) - this.w, drawY + wobble, this.w, this.h);
+       } else {
+           ctx.drawImage(activeImg, this.x, drawY + wobble, this.w, this.h);
+       }
+       ctx.restore();
+    }
+}
+
+class Dog {
+    constructor(x, y, range, speed) {
+        this.startX = x; this.x = x; this.y = y; this.w = 75; this.h = 55;
+        this.range = Math.max(range, 60); this.speed = speed;
+
+        // Randomly cycle between monster1.png and monster4.png
+        const monsterNum = Math.floor(Math.random() * 4) + 1;
+        this.img = new Image();
+        this.img.src = `images/monster${monsterNum}.png`;
+    }
+    update() {
+        this.x += this.speed;
+        if (this.x > this.startX + this.range || this.x < this.startX) this.speed = -this.speed;
+    }
+    draw() {
+        ctx.save();
+        if (this.speed > 0) {
+            ctx.scale(-1, 1);
+            ctx.drawImage(this.img, -this.x - this.w, this.y, this.w, this.h);
+        } else {
+            ctx.drawImage(this.img, this.x, this.y, this.w, this.h);
+        }
+        ctx.restore();
+    }
+}
+
+window.addEventListener('keydown', e => {
+    game.keys[e.keyCode] = true;
+    if (e.keyCode === 32) game.player.jump();
+});
+window.addEventListener('keyup', e => game.keys[e.keyCode] = false);
+
+game.init();
+</script>
+</body>
+</html>
