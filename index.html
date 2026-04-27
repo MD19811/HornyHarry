@@ -157,7 +157,7 @@ const game = {
     win() {
         this.paused = true;
         const img = document.getElementById('reward-img');
-        let randomNum = Math.floor(Math.random() * 102) + 1;
+        let randomNum = Math.floor(Math.random() * 160) + 1;
         let formattedNum = randomNum.toString().padStart(2, '0');
         img.src = `https://md19811.github.io/Manillen/randomM/${formattedNum}.jpg`;
         document.getElementById('reward-overlay').style.display = 'flex';
